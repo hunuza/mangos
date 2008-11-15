@@ -418,6 +418,7 @@ Map::LoadGrid(const Cell& cell, bool no_unload)
 
 bool Map::Add(Player *player)
 {
+    i_Players.push_back(player);
     player->SetInstanceId(GetInstanceId());
 
     // update player state for other player and visa-versa
@@ -570,19 +571,11 @@ void Map::Update(const uint32 &t_diff)
     // for pets
     TypeContainerVisitor<MaNGOS::ObjectUpdater, WorldTypeMapContainer > world_object_update(updater);
 
-    //TODO: Player guard
-    HashMapHolder<Player>::MapType& playerMap = HashMapHolder<Player>::GetContainer();
-    for(HashMapHolder<Player>::MapType::iterator iter = playerMap.begin(); iter != playerMap.end(); ++iter)
+    for(PlayerList::iterator iter = i_Players.begin(); iter != i_Players.end(); ++iter)
     {
-        WorldObject* obj = iter->second;
+        WorldObject* obj = *iter;
 
         if(!obj->IsInWorld())
-            continue;
-
-        if(obj->GetMapId() != GetId())
-            continue;
-
-        if(obj->GetInstanceId() != GetInstanceId())
             continue;
 
         CellPair standing_cell(MaNGOS::ComputeCellPair(obj->GetPositionX(), obj->GetPositionY()));
@@ -637,6 +630,7 @@ void Map::Update(const uint32 &t_diff)
 
 void Map::Remove(Player *player, bool remove)
 {
+    i_Players.remove(player);
     CellPair p = MaNGOS::ComputeCellPair(player->GetPositionX(), player->GetPositionY());
     if(p.x_coord >= TOTAL_NUMBER_OF_CELLS_PER_MAP || p.y_coord >= TOTAL_NUMBER_OF_CELLS_PER_MAP)
     {
@@ -1434,6 +1428,21 @@ bool Map::CanUnload(const uint32 &diff)
     return false;
 }
 
+uint32 Map::GetPlayersCountExceptGMs() const
+{
+    uint32 count = 0;
+    for(PlayerList::const_iterator itr = i_Players.begin(); itr != i_Players.end(); ++itr)
+        if(!(*itr)->isGameMaster())
+            ++count;
+    return count;
+}
+
+void Map::SendToPlayers(WorldPacket const* data) const
+{
+    for(PlayerList::const_iterator itr = i_Players.begin(); itr != i_Players.end(); ++itr)
+        (*itr)->GetSession()->SendPacket(data);
+}
+
 template void Map::Add(Corpse *);
 template void Map::Add(Creature *);
 template void Map::Add(GameObject *);
@@ -1586,7 +1595,6 @@ bool InstanceMap::Add(Player *player)
         if(i_data) i_data->OnPlayerEnter(player);
         SetResetSchedule(false);
 
-        i_Players.push_back(player);
         player->SendInitWorldStates();
         sLog.outDetail("MAP: Player '%s' entered the instance '%u' of map '%s'", player->GetName(), GetInstanceId(), GetMapName());
         // initialize unload state
@@ -1611,9 +1619,8 @@ void InstanceMap::Update(const uint32& t_diff)
 void InstanceMap::Remove(Player *player, bool remove)
 {
     sLog.outDetail("MAP: Removing player '%s' from instance '%u' of map '%s' before relocating to other map", player->GetName(), GetInstanceId(), GetMapName());
-    i_Players.remove(player);
     SetResetSchedule(true);
-    if(!m_unloadTimer && i_Players.empty())
+    if(!m_unloadTimer && i_Players.size() == 1)
         m_unloadTimer = m_unloadWhenEmpty ? MIN_UNLOAD_DELAY : std::max(sWorld.getConfig(CONFIG_INSTANCE_UNLOAD_DELAY), (uint32)MIN_UNLOAD_DELAY);
     Map::Remove(player, remove);
 }
@@ -1697,15 +1704,6 @@ bool InstanceMap::Reset(uint8 method)
     return i_Players.empty();
 }
 
-uint32 InstanceMap::GetPlayersCountExceptGMs() const
-{
-    uint32 count = 0;
-    for(PlayerList::const_iterator itr = i_Players.begin(); itr != i_Players.end(); ++itr)
-        if(!(*itr)->isGameMaster())
-            ++count;
-    return count;
-}
-
 void InstanceMap::PermBindAllPlayers(Player *player)
 {
     InstanceSave *save = sInstanceSaveManager.GetInstanceSave(GetInstanceId());
@@ -1779,12 +1777,6 @@ void InstanceMap::SetResetSchedule(bool on)
     }
 }
 
-void InstanceMap::SendToPlayers(WorldPacket const* data) const
-{
-    for(PlayerList::const_iterator itr = i_Players.begin(); itr != i_Players.end(); ++itr)
-        (*itr)->GetSession()->SendPacket(data);
-}
-
 /* ******* Battleground Instance Maps ******* */
 
 BattleGroundMap::BattleGroundMap(uint32 id, time_t expiry, uint32 InstanceId)
@@ -1819,7 +1811,6 @@ bool BattleGroundMap::Add(Player * player)
         Guard guard(*this);
         if(!CanEnter(player))
             return false;
-        i_Players.push_back(player);
         // reset instance validity, battleground maps do not homebind
         player->m_InstanceValid = true;
     }
@@ -1829,7 +1820,6 @@ bool BattleGroundMap::Add(Player * player)
 void BattleGroundMap::Remove(Player *player, bool remove)
 {
     sLog.outDetail("MAP: Removing player '%s' from bg '%u' of map '%s' before relocating to other map", player->GetName(), GetInstanceId(), GetMapName());
-    i_Players.remove(player);
     Map::Remove(player, remove);
 }
 
@@ -1840,7 +1830,7 @@ void BattleGroundMap::SetUnload()
 
 void BattleGroundMap::UnloadAll(bool pForce)
 {
-    while(!i_Players.empty())
+    while(HavePlayers())
     {
         PlayerList::iterator itr = i_Players.begin();
         Player * plr = *itr;
