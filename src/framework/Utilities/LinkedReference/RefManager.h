@@ -30,8 +30,8 @@ template <class TO, class FROM> class RefManager : public LinkedListHead
         RefManager() { }
         virtual ~RefManager() { clearReferences(); }
 
-        Reference<TO, FROM>* getFirst() { return ((Reference<TO, FROM>*) LinkedListHead::getFirst()); }
-        Reference<TO, FROM>* getLast() { return ((Reference<TO, FROM>*) LinkedListHead::getLast()); }
+        Reference<TO, FROM>* getFirst() const { return ((Reference<TO, FROM>*) LinkedListHead::getFirst()); }
+        Reference<TO, FROM>* getLast() const { return ((Reference<TO, FROM>*) LinkedListHead::getLast()); }
 
         iterator begin() { return iterator(getFirst()); }
         iterator end() { return iterator(NULL); }

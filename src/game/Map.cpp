@@ -33,6 +33,7 @@
 #include "World.h"
 #include "ScriptCalls.h"
 #include "Group.h"
+#include "MapRefManager.h"
 
 #include "MapInstanced.h"
 #include "InstanceSaveMgr.h"
@@ -418,7 +419,8 @@ Map::LoadGrid(const Cell& cell, bool no_unload)
 
 bool Map::Add(Player *player)
 {
-    i_Players.push_back(player);
+    player->GetMapRef().link(this, player);
+
     player->SetInstanceId(GetInstanceId());
 
     // update player state for other player and visa-versa
@@ -571,14 +573,13 @@ void Map::Update(const uint32 &t_diff)
     // for pets
     TypeContainerVisitor<MaNGOS::ObjectUpdater, WorldTypeMapContainer > world_object_update(updater);
 
-    for(PlayerList::iterator iter = i_Players.begin(); iter != i_Players.end(); ++iter)
+    for(MapRefManager::iterator iter = m_mapRefManager.begin(); iter != m_mapRefManager.end(); ++iter)
     {
-        WorldObject* obj = *iter;
-
-        if(!obj->IsInWorld())
+        Player* plr = iter->getSource();
+        if(!plr->IsInWorld())
             continue;
 
-        CellPair standing_cell(MaNGOS::ComputeCellPair(obj->GetPositionX(), obj->GetPositionY()));
+        CellPair standing_cell(MaNGOS::ComputeCellPair(plr->GetPositionX(), plr->GetPositionY()));
 
         // Check for correctness of standing_cell, it also avoids problems with update_cell
         if (standing_cell.x_coord >= TOTAL_NUMBER_OF_CELLS_PER_MAP || standing_cell.y_coord >= TOTAL_NUMBER_OF_CELLS_PER_MAP)
@@ -630,7 +631,7 @@ void Map::Update(const uint32 &t_diff)
 
 void Map::Remove(Player *player, bool remove)
 {
-    i_Players.remove(player);
+    player->GetMapRef().unlink();
     CellPair p = MaNGOS::ComputeCellPair(player->GetPositionX(), player->GetPositionY());
     if(p.x_coord >= TOTAL_NUMBER_OF_CELLS_PER_MAP || p.y_coord >= TOTAL_NUMBER_OF_CELLS_PER_MAP)
     {
@@ -1431,16 +1432,16 @@ bool Map::CanUnload(const uint32 &diff)
 uint32 Map::GetPlayersCountExceptGMs() const
 {
     uint32 count = 0;
-    for(PlayerList::const_iterator itr = i_Players.begin(); itr != i_Players.end(); ++itr)
-        if(!(*itr)->isGameMaster())
+    for(MapRefManager::iterator itr = m_mapRefManager.begin(); itr != m_mapRefManager.end(); ++itr)
+        if(!itr->getSource()->isGameMaster())
             ++count;
     return count;
 }
 
 void Map::SendToPlayers(WorldPacket const* data) const
 {
-    for(PlayerList::const_iterator itr = i_Players.begin(); itr != i_Players.end(); ++itr)
-        (*itr)->GetSession()->SendPacket(data);
+    for(MapRefManager::iterator itr = m_mapRefManager.begin(); itr != m_mapRefManager.end(); ++itr)
+        itr->getSource()->GetSession()->SendPacket(data);
 }
 
 template void Map::Add(Corpse *);
@@ -1478,7 +1479,7 @@ InstanceMap::~InstanceMap()
 */
 bool InstanceMap::CanEnter(Player *player)
 {
-    if(std::find(i_Players.begin(),i_Players.end(),player)!=i_Players.end())
+    if(player->GetMapRef().getTarget() == this)
     {
         sLog.outError("InstanceMap::CanEnter - player %s(%u) already in map %d,%d,%d!", player->GetName(), player->GetGUIDLow(), GetId(), GetInstanceId(), GetSpawnMode());
         assert(false);
@@ -1620,7 +1621,7 @@ void InstanceMap::Remove(Player *player, bool remove)
 {
     sLog.outDetail("MAP: Removing player '%s' from instance '%u' of map '%s' before relocating to other map", player->GetName(), GetInstanceId(), GetMapName());
     SetResetSchedule(true);
-    if(!m_unloadTimer && i_Players.size() == 1)
+    if(!m_unloadTimer && m_mapRefManager.getSize() == 1)
         m_unloadTimer = m_unloadWhenEmpty ? MIN_UNLOAD_DELAY : std::max(sWorld.getConfig(CONFIG_INSTANCE_UNLOAD_DELAY), (uint32)MIN_UNLOAD_DELAY);
     Map::Remove(player, remove);
 }
@@ -1671,21 +1672,21 @@ bool InstanceMap::Reset(uint8 method)
     // note: since the map may not be loaded when the instance needs to be reset
     // the instance must be deleted from the DB by InstanceSaveManager
 
-    if(!i_Players.empty())
+    if(HavePlayers())
     {
         if(method == INSTANCE_RESET_ALL)
         {
             // notify the players to leave the instance so it can be reset
-            for(PlayerList::iterator itr = i_Players.begin(); itr != i_Players.end(); ++itr)
-                (*itr)->SendResetFailedNotify(GetId());
+            for(MapRefManager::iterator itr = m_mapRefManager.begin(); itr != m_mapRefManager.end(); ++itr)
+                itr->getSource()->SendResetFailedNotify(GetId());
         }
         else
         {
             if(method == INSTANCE_RESET_GLOBAL)
             {
                 // set the homebind timer for players inside (1 minute)
-                for(PlayerList::iterator itr = i_Players.begin(); itr != i_Players.end(); ++itr)
-                    (*itr)->m_InstanceValid = false;
+                for(MapRefManager::iterator itr = m_mapRefManager.begin(); itr != m_mapRefManager.end(); ++itr)
+                    itr->getSource()->m_InstanceValid = false;
             }
 
             // the unload timer is not started
@@ -1701,7 +1702,7 @@ bool InstanceMap::Reset(uint8 method)
         m_resetAfterUnload = true;
     }
 
-    return i_Players.empty();
+    return m_mapRefManager.getSize() == 0;
 }
 
 void InstanceMap::PermBindAllPlayers(Player *player)
@@ -1715,25 +1716,23 @@ void InstanceMap::PermBindAllPlayers(Player *player)
 
     Group *group = player->GetGroup();
     // group members outside the instance group don't get bound
-    for(PlayerList::iterator itr = i_Players.begin(); itr != i_Players.end(); ++itr)
+    for(MapRefManager::iterator itr = m_mapRefManager.begin(); itr != m_mapRefManager.end(); ++itr)
     {
-        if(*itr)
+        Player* plr = itr->getSource();
+        // players inside an instance cannot be bound to other instances
+        // some players may already be permanently bound, in this case nothing happens
+        InstancePlayerBind *bind = plr->GetBoundInstance(save->GetMapId(), save->GetDifficulty());
+        if(!bind || !bind->perm)
         {
-            // players inside an instance cannot be bound to other instances
-            // some players may already be permanently bound, in this case nothing happens
-            InstancePlayerBind *bind = (*itr)->GetBoundInstance(save->GetMapId(), save->GetDifficulty());
-            if(!bind || !bind->perm)
-            {
-                (*itr)->BindToInstance(save, true);
-                WorldPacket data(SMSG_INSTANCE_SAVE_CREATED, 4);
-                data << uint32(0);
-                (*itr)->GetSession()->SendPacket(&data);
-            }
-
-            // if the leader is not in the instance the group will not get a perm bind
-            if(group && group->GetLeaderGUID() == (*itr)->GetGUID())
-                group->BindToInstance(save, true);
+            plr->BindToInstance(save, true);
+            WorldPacket data(SMSG_INSTANCE_SAVE_CREATED, 4);
+            data << uint32(0);
+            plr->GetSession()->SendPacket(&data);
         }
+
+        // if the leader is not in the instance the group will not get a perm bind
+        if(group && group->GetLeaderGUID() == plr->GetGUID())
+            group->BindToInstance(save, true);
     }
 }
 
@@ -1745,11 +1744,14 @@ time_t InstanceMap::GetResetTime()
 
 void InstanceMap::UnloadAll(bool pForce)
 {
-    if(!i_Players.empty())
+    if(HavePlayers())
     {
         sLog.outError("InstanceMap::UnloadAll: there are still players in the instance at unload, should not happen!");
-        for(PlayerList::iterator itr = i_Players.begin(); itr != i_Players.end(); ++itr)
-            if(*itr) (*itr)->TeleportTo((*itr)->m_homebindMapId, (*itr)->m_homebindX, (*itr)->m_homebindY, (*itr)->m_homebindZ, (*itr)->GetOrientation());
+        for(MapRefManager::iterator itr = m_mapRefManager.begin(); itr != m_mapRefManager.end(); ++itr)
+        {
+            Player* plr = itr->getSource();
+            plr->TeleportTo(plr->m_homebindMapId, plr->m_homebindX, plr->m_homebindY, plr->m_homebindZ, plr->GetOrientation());
+        }
     }
 
     if(m_resetAfterUnload == true)
@@ -1760,8 +1762,8 @@ void InstanceMap::UnloadAll(bool pForce)
 
 void InstanceMap::SendResetWarnings(uint32 timeLeft)
 {
-    for(PlayerList::iterator itr = i_Players.begin(); itr != i_Players.end(); ++itr)
-        (*itr)->SendInstanceResetWarning(GetId(), timeLeft);
+    for(MapRefManager::iterator itr = m_mapRefManager.begin(); itr != m_mapRefManager.end(); ++itr)
+        itr->getSource()->SendInstanceResetWarning(GetId(), timeLeft);
 }
 
 void InstanceMap::SetResetSchedule(bool on)
@@ -1769,7 +1771,7 @@ void InstanceMap::SetResetSchedule(bool on)
     // only for normal instances
     // the reset time is only scheduled when there are no payers inside
     // it is assumed that the reset time will rarely (if ever) change while the reset is scheduled
-    if(i_Players.empty() && !IsRaid() && !IsHeroic())
+    if(!HavePlayers() && !IsRaid() && !IsHeroic())
     {
         InstanceSave *save = sInstanceSaveManager.GetInstanceSave(GetInstanceId());
         if(!save) sLog.outError("InstanceMap::SetResetSchedule: cannot turn schedule %s, no save available for instance %d of %d", on ? "on" : "off", GetInstanceId(), GetId());
@@ -1790,7 +1792,7 @@ BattleGroundMap::~BattleGroundMap()
 
 bool BattleGroundMap::CanEnter(Player * player)
 {
-    if(std::find(i_Players.begin(),i_Players.end(),player)!=i_Players.end())
+    if(player->GetMapRef().getTarget() == this)
     {
         sLog.outError("BGMap::CanEnter - player %u already in map!", player->GetGUIDLow());
         assert(false);
@@ -1832,13 +1834,12 @@ void BattleGroundMap::UnloadAll(bool pForce)
 {
     while(HavePlayers())
     {
-        PlayerList::iterator itr = i_Players.begin();
-        Player * plr = *itr;
-        if(plr) (plr)->TeleportTo((*itr)->m_homebindMapId, (*itr)->m_homebindX, (*itr)->m_homebindY, (*itr)->m_homebindZ, (*itr)->GetOrientation());
+        Player * plr = m_mapRefManager.getFirst()->getSource();
+        if(plr) (plr)->TeleportTo(plr->m_homebindMapId, plr->m_homebindX, plr->m_homebindY, plr->m_homebindZ, plr->GetOrientation());
         // TeleportTo removes the player from this map (if the map exists) -> calls BattleGroundMap::Remove -> invalidates the iterator.
         // just in case, remove the player from the list explicitly here as well to prevent a possible infinite loop
         // note that this remove is not needed if the code works well in other places
-        i_Players.remove(plr);
+        plr->GetMapRef().delink();
     }
 
     Map::UnloadAll(pForce);

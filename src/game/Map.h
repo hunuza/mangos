@@ -31,6 +31,7 @@
 #include "Timer.h"
 #include "SharedDefines.h"
 #include "GameSystem/GridRefManager.h"
+#include "MapRefManager.h"
 
 #include <bitset>
 #include <list>
@@ -233,12 +234,12 @@ class MANGOS_DLL_SPEC Map : public GridRefManager<NGridType>, public MaNGOS::Obj
         bool isCellMarked(uint32 pCellId) { return marked_cells.test(pCellId); }
         void markCell(uint32 pCellId) { marked_cells.set(pCellId); }
 
-        typedef std::list<Player *> PlayerList;
-        PlayerList const& GetPlayers() const { return i_Players;}
-        uint32 HavePlayers() const { return !i_Players.empty(); }
+        bool HavePlayers() const { return m_mapRefManager.getSize() != 0; }
         uint32 GetPlayersCountExceptGMs() const;
 
         void SendToPlayers(WorldPacket const* data) const;
+
+        MapRefManager m_mapRefManager;
 
     private:
         void LoadVMap(int pX, int pY);
@@ -287,10 +288,6 @@ class MANGOS_DLL_SPEC Map : public GridRefManager<NGridType>, public MaNGOS::Obj
         uint32 i_id;
         uint32 i_InstanceId;
         uint32 m_unloadTimer;
-
-        // only online players that are inside the map currently
-        // TODO ? - use the grid instead to access the players
-        PlayerList i_Players;
 
     private:
         typedef GridReadGuard ReadGuard;
