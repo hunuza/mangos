@@ -8723,7 +8723,7 @@ void Unit::SetVisibility(UnitVisibility x)
 
     if(IsInWorld())
     {
-        Map *m = MapManager::Instance().GetMap(GetMapId(), this);
+        Map *m = GetMap();
 
         if(GetTypeId()==TYPEID_PLAYER)
             m->PlayerRelocation((Player*)this,GetPositionX(),GetPositionY(),GetPositionZ(),GetOrientation());
@@ -10476,8 +10476,8 @@ Unit* Unit::SelectNearbyTarget() const
         TypeContainerVisitor<MaNGOS::UnitListSearcher<MaNGOS::AnyUnfriendlyUnitInObjectRangeCheck>, GridTypeMapContainer >  grid_unit_searcher(searcher);
 
         CellLock<GridReadGuard> cell_lock(cell, p);
-        cell_lock->Visit(cell_lock, world_unit_searcher, *MapManager::Instance().GetMap(GetMapId(), this));
-        cell_lock->Visit(cell_lock, grid_unit_searcher, *MapManager::Instance().GetMap(GetMapId(), this));
+        cell_lock->Visit(cell_lock, world_unit_searcher, *GetMap());
+        cell_lock->Visit(cell_lock, grid_unit_searcher, *GetMap());
     }
 
     // remove current target
