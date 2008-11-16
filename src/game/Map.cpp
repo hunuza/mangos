@@ -920,7 +920,7 @@ bool Map::UnloadGrid(const uint32 &x, const uint32 &y, bool pForce)
     assert( grid != NULL);
 
     {
-        if(!pForce && ObjectAccessor::Instance().PlayersNearGrid(x, y, i_id, i_InstanceId) )
+        if(!pForce && PlayersNearGrid(x, y) )
             return false;
 
         DEBUG_LOG("Unloading grid[%u,%u] for map %u", x,y, i_id);
@@ -1444,6 +1444,28 @@ void Map::SendToPlayers(WorldPacket const* data) const
         itr->getSource()->GetSession()->SendPacket(data);
 }
 
+bool Map::PlayersNearGrid(uint32 x, uint32 y) const
+{
+    CellPair cell_min(x*MAX_NUMBER_OF_CELLS, y*MAX_NUMBER_OF_CELLS);
+    CellPair cell_max(cell_min.x_coord + MAX_NUMBER_OF_CELLS, cell_min.y_coord+MAX_NUMBER_OF_CELLS);
+    cell_min << 2;
+    cell_min -= 2;
+    cell_max >> 2;
+    cell_max += 2;
+
+    for(MapRefManager::iterator iter = m_mapRefManager.begin(); iter != m_mapRefManager.end(); ++iter)
+    {
+        Player* plr = iter->getSource();
+
+        CellPair p = MaNGOS::ComputeCellPair(plr->GetPositionX(), plr->GetPositionY());
+        if( (cell_min.x_coord <= p.x_coord && p.x_coord <= cell_max.x_coord) &&
+            (cell_min.y_coord <= p.y_coord && p.y_coord <= cell_max.y_coord) )
+            return true;
+    }
+
+    return false;
+}
+
 template void Map::Add(Corpse *);
 template void Map::Add(Creature *);
 template void Map::Add(GameObject *);
@@ -1839,7 +1861,7 @@ void BattleGroundMap::UnloadAll(bool pForce)
         // TeleportTo removes the player from this map (if the map exists) -> calls BattleGroundMap::Remove -> invalidates the iterator.
         // just in case, remove the player from the list explicitly here as well to prevent a possible infinite loop
         // note that this remove is not needed if the code works well in other places
-        plr->GetMapRef().delink();
+        plr->GetMapRef().unlink();
     }
 
     Map::UnloadAll(pForce);
