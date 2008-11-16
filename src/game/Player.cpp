@@ -5128,7 +5128,8 @@ bool Player::SetPosition(float x, float y, float z, float orientation, bool tele
         return false;
     }
 
-    Map *m = GetMap();
+    // don't use GetMap() because Map can be created here
+    Map *m = MapManager::Instance().GetMap(GetMapId(), this);
 
     const float old_x = GetPositionX();
     const float old_y = GetPositionY();
@@ -13442,7 +13443,7 @@ bool Player::LoadFromDB( uint32 guid, SqlQueryHolder *holder )
     }
 
     // load the player's map here if it's not already loaded
-    Map *map = GetMap();
+    Map *map = MapManager::Instance().GetMap(GetMapId(), this);
     // since the player may not be bound to the map yet, make sure subsequent
     // getmap calls won't create new maps
     SetInstanceId(map->GetInstanceId());
