@@ -894,6 +894,7 @@ class MANGOS_DLL_SPEC Player : public Unit
 
         void AddToWorld();
         void RemoveFromWorld();
+        Map* GetMap() const { return m_mapRef.getTarget(); }
 
         bool TeleportTo(uint32 mapid, float x, float y, float z, float orientation, uint32 options = 0);
 
