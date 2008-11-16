@@ -1724,7 +1724,7 @@ bool InstanceMap::Reset(uint8 method)
         m_resetAfterUnload = true;
     }
 
-    return m_mapRefManager.getSize() == 0;
+    return m_mapRefManager.isEmpty();
 }
 
 void InstanceMap::PermBindAllPlayers(Player *player)
